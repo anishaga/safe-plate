@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Safe Plate</title>
+<style>
+:root{--bg:#f2f6f3;--fg:#14352b;--mut:#5d756b;--card:#fff;--line:#d3e0d9;--ok:#1f7a4d;--bad:#c2301f;--wash:#fdecea}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1c17;--fg:#e4f0ea;--mut:#8fb0a2;--card:#16271f;--line:#2a4237;--ok:#5fd39a;--bad:#ff8a78;--wash:#3a1d19}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 "Avenir Next",Nunito,"Trebuchet MS",system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:2rem 1rem 4rem}
+h1{font-size:2.1rem;line-height:1.1;margin:0 0 .3rem;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--mut);margin:0 0 1.5rem}
+.panel,.meal{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem;margin-bottom:1rem}
+label{display:block;font-weight:600;font-size:.9rem;margin:.7rem 0 .2rem}
+input,textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.5rem .6rem}
+textarea{min-height:4.5rem;resize:vertical}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+@media(max-width:560px){.row{grid-template-columns:1fr}}
+button{font:inherit;font-weight:700;background:var(--fg);color:var(--bg);border:0;border-radius:6px;padding:.65rem 1.1rem;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+:focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+details{margin-top:.8rem}summary{cursor:pointer;color:var(--mut)}
+.meal{border-left:6px solid var(--ok)}
+.meal.flag{border-left-color:var(--bad);background:var(--wash)}
+.meal h2{margin:0 0 .2rem;font-size:1.25rem}
+.tag{font-weight:700;font-size:.9rem;color:var(--ok)}
+.flag .tag{color:var(--bad)}
+li.hit{color:var(--bad);font-weight:700}
+.mut{color:var(--mut)}.err{color:var(--bad);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>Safe Plate</h1>
+<p class="sub">Dinner ideas for one person, with a second check that never trusts the model.</p>
+<section class="panel">
+  <div class="row">
+    <div><label for="name">Who is this for?</label><input id="name" placeholder="Sam"></div>
+    <div><label for="count">How many dinners?</label><input id="count" type="number" min="1" max="7" value="3"></div>
+  </div>
+  <label for="allergies">Must avoid (comma separated)</label>
+  <input id="allergies" placeholder="peanut, shellfish, dairy">
+  <label for="dislikes">Doesn't like</label>
+  <input id="dislikes" placeholder="mushrooms, olives">
+  <label for="pantry">What's in the kitchen?</label>
+  <textarea id="pantry" placeholder="rice, chicken thighs, spinach, canned tomatoes"></textarea>
+  <details>
+    <summary>Model settings</summary>
+    <div class="row">
+      <div><label for="model">Model (any Ollama model)</label><input id="model" value="gemma3:4b"></div>
+      <div><label for="url">Ollama address</label><input id="url" value="http://localhost:11434"></div>
+    </div>
+  </details>
+  <p><button id="go">Plan dinners</button></p>
+</section>
+<div id="out" aria-live="polite"></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// Word lists the safety check scans for. Deliberately cautious: it prefers a false alarm to a miss.
+const A={
+  peanut:['peanut','groundnut'],
+  'tree nut':['almond','walnut','cashew','pecan','pistachio','hazelnut','macadamia','pine nut','marzipan'],
+  milk:['milk','butter','cheese','cream','yogurt','yoghurt','whey','casein','ghee','paneer','parmesan','mozzarella','ricotta'],
+  egg:['egg','mayo','mayonnaise','meringue'],
+  wheat:['wheat','flour','bread','pasta','noodle','couscous','semolina','bulgur','breadcrumb','tortilla','spaghetti','cracker'],
+  soy:['soy','tofu','tempeh','edamame','miso'],
+  fish:['fish','salmon','tuna','cod','anchovy','anchovies','sardine','trout','tilapia'],
+  shellfish:['shrimp','prawn','crab','lobster','clam','mussel','oyster','scallop','squid'],
+  sesame:['sesame','tahini']
+};
+A.gluten=[...A.wheat,'barley','rye','malt','beer'];
+A.nuts=[...A.peanut,...A['tree nut']];
+const ALIAS={dairy:'milk',lactose:'milk',eggs:'egg',peanuts:'peanut','tree nuts':'tree nut',nut:'nuts',seafood:'shellfish'};
+const terms=list=>[...new Set(list.flatMap(t=>{t=t.trim().toLowerCase();if(!t)return[];t=ALIAS[t]||t;return A[t]||[t]}))];
+const hit=(text,avoid)=>avoid.filter(t=>new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(text));
+
+// Settings live in this browser only.
+const K='safeplate.v1',FIELDS=['name','allergies','dislikes','model','url','count'];
+const load=()=>{try{return JSON.parse(localStorage.getItem(K))||{}}catch(e){return{}}};
+const save=p=>{try{localStorage.setItem(K,JSON.stringify(p))}catch(e){}};
+const profile=()=>({name:$('name').value.trim(),allergies:$('allergies').value.trim(),dislikes:$('dislikes').value.trim(),model:$('model').value.trim()||'gemma3:4b',url:$('url').value.trim()||'http://localhost:11434',count:Math.min(7,Math.max(1,+$('count').value||3))});
+const saved=load();FIELDS.forEach(k=>{if(saved[k]!=null)$(k).value=saved[k]});
+
+function render(meals,avoid){
+  if(!meals.length){$('out').innerHTML='<p class="err">The model returned no meals. Try again, or try a larger model.</p>';return}
+  const cards=meals.map(m=>{
+    const found=new Set(hit(String(m.name||''),avoid));
+    const items=(m.ingredients||[]).map(i=>{
+      const h=hit(String(i),avoid);h.forEach(x=>found.add(x));
+      return '<li'+(h.length?' class="hit"':'')+'>'+esc(i)+'</li>';
+    }).join('');
+    const flagged=found.size>0;
+    const steps=(m.steps||[]).map(s=>'<li>'+esc(s)+'</li>').join('');
+    return {flagged,html:'<article class="meal'+(flagged?' flag':'')+'"><h2>'+esc(m.name)+'</h2><span class="tag">'+(flagged?'Flagged: matches '+esc([...found].join(', ')):'Passed the allergen check')+'</span><p>'+esc(m.why)+'</p><ul>'+items+'</ul><ol>'+steps+'</ol></article>'};
+  });
+  cards.sort((a,b)=>a.flagged-b.flagged);
+  $('out').innerHTML=cards.map(c=>c.html).join('')+'<p class="mut">The check matches ingredient words against your list and errs toward flagging. It does not replace reading labels.</p>';
+}
+
+async function plan(){
+  const p=profile();save(p);
+  const avoid=terms(p.allergies.split(','));
+  const btn=$('go');btn.disabled=true;
+  $('out').innerHTML='<p class="mut">Asking '+esc(p.model)+' on your machine. This can take a minute…</p>';
+  const sys='You plan home dinners for '+(p.name||'a friend')+'. They must never eat: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
+  const ask='Plan '+p.count+' dinners, each under 40 minutes. In the kitchen: '+($('pantry').value||'anything')+'.';
+  try{
+    const r=await fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:'json',messages:[{role:'system',content:sys},{role:'user',content:ask}]})});
+    if(!r.ok)throw new Error('Ollama returned '+r.status+'. Is "'+p.model+'" installed? Run: ollama pull '+p.model);
+    const j=await r.json();
+    render(JSON.parse(j.message.content).meals||[],avoid);
+  }catch(e){
+    $('out').innerHTML='<p class="err">'+esc(e.message)+'</p><p class="mut">Make sure Ollama is running and that you opened this page at http://localhost:8000, not as a file.</p>';
+  }finally{btn.disabled=false}
+}
+$('go').onclick=plan;
+</script>
+</body>
+</html>

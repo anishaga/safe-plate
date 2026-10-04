@@ -75,7 +75,8 @@ const A={
 };
 A.gluten=[...A.wheat,'barley','rye','malt','beer'];
 A.nuts=[...A.peanut,...A['tree nut']];
-const ALIAS={dairy:'milk',lactose:'milk',eggs:'egg',peanuts:'peanut','tree nuts':'tree nut',nut:'nuts',seafood:'shellfish'};
+A.meat=['meat','beef','pork','lamb','veal','chicken','turkey','duck','bacon','ham','sausage','salami','pepperoni','chorizo','prosciutto','pancetta','steak','venison','lard','gelatin','worcestershire',...A.fish,...A.shellfish];
+const ALIAS={dairy:'milk',lactose:'milk',eggs:'egg',peanuts:'peanut','tree nuts':'tree nut',nut:'nuts',seafood:'shellfish',vegetarian:'meat',veggie:'meat'};
 const terms=list=>[...new Set(list.flatMap(t=>{t=t.trim().toLowerCase();if(!t)return[];t=ALIAS[t]||t;return A[t]||[t]}))];
 const hit=(text,avoid)=>avoid.filter(t=>new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(text));
 
@@ -107,7 +108,7 @@ async function plan(){
   const avoid=terms(p.allergies.split(','));
   const btn=$('go');btn.disabled=true;
   $('out').innerHTML='<p class="mut">Asking '+esc(p.model)+' on your machine. This can take a minute…</p>';
-  const sys='You plan home dinners for '+(p.name||'a friend')+'. They must never eat: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
+  const sys='You plan home dinners for '+(p.name||'a friend')+'. Strict dietary restrictions that must never be broken: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
   const ask='Plan '+p.count+' dinners, each under 40 minutes. In the kitchen: '+($('pantry').value||'anything')+'.';
   try{
     const r=await fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:'json',messages:[{role:'system',content:sys},{role:'user',content:ask}]})});

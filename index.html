@@ -59,7 +59,9 @@ li.hit{color:var(--bad);font-weight:700}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Small models don't always return plain strings, so flatten anything (text, lists, objects) to text.
+const txt=v=>v==null?'':Array.isArray(v)?v.map(txt).join(', '):typeof v==='object'?Object.values(v).map(txt).join(' '):String(v);
+const esc=s=>txt(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // Word lists the safety check scans for. Deliberately cautious: it prefers a false alarm to a miss.
 const A={
@@ -90,28 +92,32 @@ const saved=load();FIELDS.forEach(k=>{if(saved[k]!=null)$(k).value=saved[k]});
 function render(meals,avoid){
   if(!meals.length){$('out').innerHTML='<p class="err">The model returned no meals. Try again, or try a larger model.</p>';return}
   const cards=meals.map(m=>{
-    const found=new Set(hit(String(m.name||''),avoid));
-    const items=(m.ingredients||[]).map(i=>{
-      const h=hit(String(i),avoid);h.forEach(x=>found.add(x));
+    if(!m||typeof m!=='object')m={name:m};
+    // Scan every field except the one-sentence "why", whatever shape the model used.
+    const found=new Set(hit(JSON.stringify(Object.assign({},m,{why:''})).replace(/\\./g,' '),avoid));
+    const items=[].concat(m.ingredients||[]).map(i=>{
+      const h=hit(txt(i),avoid);
       return '<li'+(h.length?' class="hit"':'')+'>'+esc(i)+'</li>';
     }).join('');
     const flagged=found.size>0;
-    const steps=(m.steps||[]).map(s=>'<li>'+esc(s)+'</li>').join('');
+    const steps=[].concat(m.steps||[]).map(s=>'<li>'+esc(s)+'</li>').join('');
     return {flagged,html:'<article class="meal'+(flagged?' flag':'')+'"><h2>'+esc(m.name)+'</h2><span class="tag">'+(flagged?'Flagged: matches '+esc([...found].join(', ')):'Passed the allergen check')+'</span><p>'+esc(m.why)+'</p><ul>'+items+'</ul><ol>'+steps+'</ol></article>'};
   });
   cards.sort((a,b)=>a.flagged-b.flagged);
   $('out').innerHTML=cards.map(c=>c.html).join('')+'<p class="mut">The check matches ingredient words against your list and errs toward flagging. It does not replace reading labels.</p>';
 }
 
+// Ask Ollama to enforce this shape, so even a tiny model can't return objects where text belongs.
+const SCHEMA={type:'object',properties:{meals:{type:'array',items:{type:'object',properties:{name:{type:'string'},why:{type:'string'},ingredients:{type:'array',items:{type:'string'}},steps:{type:'array',items:{type:'string'}}},required:['name','why','ingredients','steps']}}},required:['meals']};
 async function plan(){
   const p=profile();save(p);
   const avoid=terms(p.allergies.split(','));
   const btn=$('go');btn.disabled=true;
   $('out').innerHTML='<p class="mut">Asking '+esc(p.model)+' on your machine. This can take a minute…</p>';
-  const sys='You plan home dinners for '+(p.name||'a friend')+'. Strict dietary restrictions that must never be broken: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
+  const sys='You plan home dinners for '+(p.name||'a friend')+'. Strict dietary restrictions that must never be broken: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only, with each ingredient and each step as its own short text item: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
   const ask='Plan '+p.count+' dinners, each under 40 minutes. In the kitchen: '+($('pantry').value||'anything')+'.';
   try{
-    const r=await fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:'json',messages:[{role:'system',content:sys},{role:'user',content:ask}]})});
+    const r=await fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:SCHEMA,messages:[{role:'system',content:sys},{role:'user',content:ask}]})});
     if(!r.ok)throw new Error('Ollama returned '+r.status+'. Is "'+p.model+'" installed? Run: ollama pull '+p.model);
     const j=await r.json();
     render(JSON.parse(j.message.content).meals||[],avoid);

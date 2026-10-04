@@ -62,6 +62,7 @@ const $=id=>document.getElementById(id);
 // Small models don't always return plain strings, so flatten anything (text, lists, objects) to text.
 const txt=v=>v==null?'':Array.isArray(v)?v.map(txt).join(', '):typeof v==='object'?Object.values(v).map(txt).join(' '):String(v);
 const esc=s=>txt(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const tidy=v=>txt(v).trim().replace(/[,;:]+$/,'');
 
 // Word lists the safety check scans for. Deliberately cautious: it prefers a false alarm to a miss.
 const A={
@@ -100,8 +101,8 @@ function render(meals,avoid){
       return '<li'+(h.length?' class="hit"':'')+'>'+esc(i)+'</li>';
     }).join('');
     const flagged=found.size>0;
-    const steps=[].concat(m.steps||[]).map(s=>'<li>'+esc(s)+'</li>').join('');
-    return {flagged,html:'<article class="meal'+(flagged?' flag':'')+'"><h2>'+esc(m.name)+'</h2><span class="tag">'+(flagged?'Flagged: matches '+esc([...found].join(', ')):'Passed the allergen check')+'</span><p>'+esc(m.why)+'</p><ul>'+items+'</ul><ol>'+steps+'</ol></article>'};
+    const steps=[].concat(m.steps||[]).flatMap(s=>txt(s).replace(/([.!?])\s+/g,'$1\n').split('\n')).filter(s=>s.trim()&&!/^\d{1,2}[.)]$/.test(s.trim())).map(s=>'<li>'+esc(s)+'</li>').join('');
+    return {flagged,html:'<article class="meal'+(flagged?' flag':'')+'"><h2>'+esc(tidy(m.name))+'</h2><span class="tag">'+(flagged?'Flagged: matches '+esc([...found].join(', ')):'Passed the allergen check')+'</span><p>'+esc(tidy(m.why))+'</p><ul>'+items+'</ul><ol>'+steps+'</ol></article>'};
   });
   cards.sort((a,b)=>a.flagged-b.flagged);
   $('out').innerHTML=cards.map(c=>c.html).join('')+'<p class="mut">The check matches ingredient words against your list and errs toward flagging. It does not replace reading labels.</p>';
@@ -114,11 +115,16 @@ async function plan(){
   const avoid=terms(p.allergies.split(','));
   const btn=$('go');btn.disabled=true;
   $('out').innerHTML='<p class="mut">Asking '+esc(p.model)+' on your machine. This can take a minute…</p>';
-  const sys='You plan home dinners for '+(p.name||'a friend')+'. Strict dietary restrictions that must never be broken: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only, with each ingredient and each step as its own short text item: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
+  const sys='You plan home dinners for '+(p.name||'a friend')+'. Strict dietary restrictions that must never be broken: '+(p.allergies||'(nothing listed)')+'. They dislike: '+(p.dislikes||'(nothing listed)')+'. Never use those ingredients or anything made from them. Reply with JSON only. Start every ingredient with an amount (like "2 tbsp oil") and put each step, as one short sentence, in its own item: {"meals":[{"name":"","why":"one sentence","ingredients":["amount ingredient"],"steps":["short step"]}]}';
   const ask='Plan '+p.count+' dinners, each under 40 minutes. In the kitchen: '+($('pantry').value||'anything')+'.';
+  const call=fmt=>fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:fmt,messages:[{role:'system',content:sys},{role:'user',content:ask}]})});
   try{
-    const r=await fetch(p.url.replace(/\/$/,'')+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:p.model,stream:false,format:SCHEMA,messages:[{role:'system',content:sys},{role:'user',content:ask}]})});
-    if(!r.ok)throw new Error('Ollama returned '+r.status+'. Is "'+p.model+'" installed? Run: ollama pull '+p.model);
+    let r=await call(SCHEMA);
+    if(!r.ok)r=await call('json'); // some model and Ollama combinations reject strict schemas, so retry with loose JSON
+    if(!r.ok){
+      let why='';try{why=(await r.json()).error||''}catch(e){}
+      throw new Error('Ollama returned '+r.status+(why?': '+why:'')+(r.status===404?'. Run: ollama pull '+p.model:''));
+    }
     const j=await r.json();
     render(JSON.parse(j.message.content).meals||[],avoid);
   }catch(e){
